@@ -1,0 +1,44 @@
+# --- Python Environment ---
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# --- YOLO & Ultralytics ---
+# Ignore training runs, logs, and downloaded weights
+yolo/runs/
+runs/
+*.pt
+*.onnx
+bus.jpg
+yolo8*.yaml
+
+# --- Generated Hardware Artifacts ---
+# These are the outputs of your compiler.py 
+# They change every time you compile and should be generated locally.
+*.mem
+scales.txt
+biases.npy
+
+# --- Simulation Outputs ---
+# These are the visual verification results
+npu_sim_output.jpg
+
+# --- IDE & System Junk ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+
+# --- Data & Large Files ---
+# If you have a folder for your FSOCO dataset images
+data/
+datasets/
+*.jpg
+*.png
+!amz_00000.jpg  # Example: Keep this specific test image if you want it in the repo

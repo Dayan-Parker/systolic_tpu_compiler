@@ -1,0 +1,11 @@
+# dataset.yaml
+path: D:\WUAIR\fsoco_yolo  # Path to your data
+train: images/train
+val: images/val
+
+names:
+  0: blue_cone
+  1: yellow_cone
+  2: orange_cone
+  3: big_orange_cone
+  # 4: unknown_cone (sometimes present)
