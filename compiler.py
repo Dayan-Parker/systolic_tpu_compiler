@@ -250,9 +250,9 @@ def main(weights_path, input_resolution, systolic_arr_size, mem_bank_a, mem_bank
 
 if __name__ == "__main__":
     # Test Parameters
-    NETWORK_PATH = "best.pt"
+    NETWORK_PATH = "yolo_pico.yaml"
     IMAGE_RES = (240, 240) # (Height, Width)
-    SYS_ARRAY_DIM = 32
+    SYS_ARRAY_DIM = 16
 
     # Base Memory Addresses (Word Aligned)
     RAM_A_BASE = 0x00000
