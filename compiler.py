@@ -250,7 +250,7 @@ def main(weights_path, input_resolution, systolic_arr_size, mem_bank_a, mem_bank
 
 if __name__ == "__main__":
     # Test Parameters
-    NETWORK_PATH = "yolo_pico.yaml"
+    NETWORK_PATH = "best.pt"
     IMAGE_RES = (240, 240) # (Height, Width)
     SYS_ARRAY_DIM = 16
 

@@ -10,11 +10,11 @@ def train_fsoco_model():
 
     # 1. LOAD THE CUSTOM LINEAR YAML!
     # Do not pass a .pt file here. We must build the custom architecture.
-    model = YOLO("yolo_pico.yaml") 
+    model = YOLO("yolo/yolo_linear_pico.yaml") 
 
     results = model.train(
-        data="fsoco.yaml",
-        epochs=300,
+        data="yolo/fsoco.yaml",
+        epochs=120,
         
         # 2. CRITICAL HARDWARE FIX: Must be a multiple of 32!
         # 256x256 prevents fractional pixel errors in the systolic array.
@@ -22,7 +22,7 @@ def train_fsoco_model():
         
         batch=16,               
         device=0,               
-        workers=8,
+        workers=10,
         hsv_h=0.015,            
         hsv_s=0.7,              
         hsv_v=0.4,              
@@ -33,7 +33,7 @@ def train_fsoco_model():
         erasing=0.4,            
         
         project="fsoco_training",
-        name="run_linear_hardware",
+        name="run_linear_cnn",
         exist_ok=True,
         plots=True
     )
@@ -41,7 +41,7 @@ def train_fsoco_model():
     print("Training Complete. Exporting to standard PyTorch weights...")
     
     # Export to standard formats (Optional, since we just need the best.pt file)
-    model.export(format="onnx", imgsz=[256, 256], opset=12) 
+    model.export(format="onnx", imgsz=[512, 512], opset=12) 
 
 if __name__ == '__main__':
     train_fsoco_model()

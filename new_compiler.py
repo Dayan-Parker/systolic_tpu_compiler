@@ -34,18 +34,34 @@ def pack_weights_to_hex(int8_matrix):
 def make_opcode(opcode_hex, payload_val):
     return f"{(int(opcode_hex, 16) << 28 | (int(payload_val) & 0xFFFFFFF)):08X}"
 
-# --- Calibration ---
+# --- Calibration using Forward Hooks ---
 def calibrate_activations(model, img_path):
     print(f"[CALIBRATOR] Calibrating range using {img_path}...")
     scales = []
+    
+    # This "spy" function runs every time a Conv layer finishes
+    def hook_fn(module, input, output):
+        m = torch.max(torch.abs(output)).item()
+        # Calculate scale to keep the hardware safely within -127 to 127
+        scales.append(127.0 / (m * 1.2) if m > 0 else 1.0)
+
+    hooks = []
+    # Attach the spy to every compiled layer
+    for name, mod in model.model.named_modules():
+        if "model.14" in name: continue
+        if hasattr(mod, 'conv') and hasattr(mod, 'bn'):
+            hooks.append(mod.register_forward_hook(hook_fn))
+            
     img = cv2.imread(img_path)
-    t = torch.from_numpy(cv2.resize(img, (512, 512))).permute(2,0,1).unsqueeze(0).float() / 255.0
-    curr = t
+    img_rgb = cv2.cvtColor(cv2.resize(img, (512, 512)), cv2.COLOR_BGR2RGB)
+    t = torch.from_numpy(img_rgb).permute(2,0,1).unsqueeze(0).float() / 255.0
+    
     with torch.no_grad():
-        for i in range(11):
-            curr = model.model.model[i](curr)
-            m = torch.max(torch.abs(curr)).item()
-            scales.append(127.0 / (m * 1.2) if m > 0 else 1.0)
+        # Push the image through the raw PyTorch neural net
+        model.model(t)
+        
+    for h in hooks: h.remove()
+    print(f"[CALIBRATOR] Captured {len(scales)} unique layer scales.")
     return scales
 
 # --- Compiler ---
@@ -54,18 +70,22 @@ def main_compiler(weights_path, cal_img_path):
     scales = calibrate_activations(model, cal_img_path)
     
     print("[COMPILER] Generating Instructions & Weight memory...")
-    insts, weights = [], []
+    insts, weights, biases = [], [], []
     curr_res, addr_b, l_idx = (512, 512), 0, 0
     
+    # Use named_modules to catch every nested C2f convolution!
     for name, mod in model.model.named_modules():
-        if "model.11" in name: continue
+        if "model.14" in name: continue
         if not (hasattr(mod, 'conv') and hasattr(mod, 'bn')): continue
         
         f_w, f_b = fuse_conv_and_bn(mod.conv.weight.detach().cpu().numpy(), np.zeros(mod.conv.weight.shape[0]),
                                      mod.bn.weight.detach().cpu().numpy(), mod.bn.bias.detach().cpu().numpy(),
                                      mod.bn.running_mean.detach().cpu().numpy(), mod.bn.running_var.detach().cpu().numpy())
         
+        biases.append(f_b)
         int8_w, sw = quantize_to_int8(f_w.transpose(2, 3, 1, 0))
+        
+        # Bridge the dynamic scales for the VPU instructions
         in_s = 127.0 if l_idx == 0 else scales[l_idx-1]
         requant = scales[l_idx] / (in_s * sw)
         
@@ -93,9 +113,8 @@ def main_compiler(weights_path, cal_img_path):
     with open("network_weights.mem", "w") as f: f.write("\n".join(weights))
     with open("scales.txt", "w") as f: f.write("\n".join([str(s) for s in scales]))
     
-    # Also save biases for the simulator specifically
-    np.save("biases.npy", np.array(model.model.model[-1].bias.detach().cpu().numpy() if hasattr(model.model.model[-1], 'bias') else []))
-    print(f"Success! Wrote {len(insts)} instructions to .mem files.")
+    np.save("biases.npy", np.array(biases, dtype=object))
+    print(f"[COMPILER] Success! Wrote {len(insts)} instructions to .mem files.")
 
 if __name__ == "__main__":
-    main_compiler(r"yolo\runs\detect\fsoco_training\run_linear_hardware\weights\best.pt", "amz_00000.jpg")
+    main_compiler(r"linear_best.pt", "amz_00000.jpg")
