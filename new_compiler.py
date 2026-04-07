@@ -5,6 +5,8 @@ import torch.nn as nn
 from ultralytics import YOLO
 import cv2
 
+MAT_SIZE = 8
+
 # --- Quantization & Packing Helpers ---
 def fuse_conv_and_bn(weights, bias, gamma, beta, mean, var, epsilon=1e-5):
     std = np.sqrt(var + epsilon)
@@ -73,7 +75,6 @@ def main_compiler(weights_path, cal_img_path):
     insts, weights, biases = [], [], []
     curr_res, addr_b, l_idx = (512, 512), 0, 0
     
-    # Use named_modules to catch every nested C2f convolution!
     for name, mod in model.model.named_modules():
         if "model.14" in name: continue
         if not (hasattr(mod, 'conv') and hasattr(mod, 'bn')): continue
@@ -85,7 +86,6 @@ def main_compiler(weights_path, cal_img_path):
         biases.append(f_b)
         int8_w, sw = quantize_to_int8(f_w.transpose(2, 3, 1, 0))
         
-        # Bridge the dynamic scales for the VPU instructions
         in_s = 127.0 if l_idx == 0 else scales[l_idx-1]
         requant = scales[l_idx] / (in_s * sw)
         
@@ -95,7 +95,7 @@ def main_compiler(weights_path, cal_img_path):
         act = 2 if isinstance(getattr(mod, 'act', None), nn.SiLU) else (1 if isinstance(getattr(mod, 'act', None), nn.ReLU) else 0)
         
         weights.extend(pack_weights_to_hex(int8_w))
-        insts.extend([make_opcode('3', 32), make_opcode('5', int8_w.shape[3]), make_opcode('6', int8_w.shape[0]*int8_w.shape[1]*int8_w.shape[2]),
+        insts.extend([make_opcode('3', MAT_SIZE), make_opcode('5', int8_w.shape[3]), make_opcode('6', int8_w.shape[0]*int8_w.shape[1]*int8_w.shape[2]),
                       make_opcode('2', addr_b), make_opcode('7', act), make_opcode('B', float_to_fixed28(requant)), make_opcode('9', (s<<8)|(k<<4)|p)])
         
         m_rem, ping = h_out*w_out, True
@@ -112,7 +112,15 @@ def main_compiler(weights_path, cal_img_path):
     with open("instructions.mem", "w") as f: f.write("\n".join(insts))
     with open("network_weights.mem", "w") as f: f.write("\n".join(weights))
     with open("scales.txt", "w") as f: f.write("\n".join([str(s) for s in scales]))
-    
+    bias_hw_hex = []
+    for l_idx, b_array in enumerate(biases):
+        out_scale = scales[l_idx]
+        for b_val in b_array:
+            #(Bias * Out_Scale) * 65536
+            b_int64 = int(round(b_val * out_scale * 65536.0)) & 0xFFFFFFFFFFFFFFFF
+            bias_hw_hex.append(f"{b_int64:016X}")
+            
+    with open("biases.mem", "w") as f: f.write("\n".join(bias_hw_hex))
     np.save("biases.npy", np.array(biases, dtype=object))
     print(f"[COMPILER] Success! Wrote {len(insts)} instructions to .mem files.")
 

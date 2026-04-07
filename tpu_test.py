@@ -9,7 +9,7 @@ from ultralytics.utils.nms import non_max_suppression
 # =========================================================================
 # 1. Hardware Architecture Constants & RAM
 # =========================================================================
-MAT_SIZE = 32
+MAT_SIZE = 8
 RAM_A = np.zeros(262144, dtype=object)
 RAM_B = np.zeros(2000000, dtype=object)
 iram = np.zeros(100000, dtype=np.uint32)
@@ -30,7 +30,6 @@ def pack_8bit_to_256bit(pixel_array):
     for i, val in enumerate(pixel_array): word |= ((int(val) & 0xFF) << (i * 8))
     return word
 
-# FIX: Unpack 256-bit words (32 elements per word) for the Data Matrix
 def fetch_A_tile(ram, start_idx, rM, rK):
     A = np.zeros((rM, rK), dtype=np.int32)
     words_per_row = math.ceil(rK / MAT_SIZE)
@@ -45,7 +44,6 @@ def fetch_A_tile(ram, start_idx, rM, rK):
         A[i, :] = row_vals[:rK]
     return A
 
-# FIX: Unpack 32-bit words (4 elements per word) for the Weight Matrix
 def fetch_B_tile(ram, start_idx, rK, rN):
     B_flat = []
     total_words = math.ceil((rK * rN) / 4)
