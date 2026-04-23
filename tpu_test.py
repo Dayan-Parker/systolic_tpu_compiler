@@ -135,7 +135,7 @@ def run_npu_fsm():
 def main():
     global global_input_stream, GLOBAL_BIASES, GLOBAL_SCALES
     model = YOLO(r"linear_best.pt")
-    img_rgb = cv2.cvtColor(cv2.resize(cv2.imread("amz_00000.jpg"), (512, 512)), cv2.COLOR_BGR2RGB)
+    img_rgb = cv2.cvtColor(cv2.resize(cv2.imread("eco_00060.png"), (512, 512)), cv2.COLOR_BGR2RGB)
     
     with open("instructions.mem") as f: 
         for i, l in enumerate(f): iram[i] = int(l.strip(), 16)
@@ -207,7 +207,7 @@ def main():
         preds = model.model.model[-1]([hw_t])
         
     # Restored to 0.25!
-    hwd = non_max_suppression(preds, 0.1, 0.45)
+    hwd = non_max_suppression(preds, 0.0005, 0.15)
     hwd = hwd[0] if len(hwd) > 0 else None
     
     if hwd is not None:
