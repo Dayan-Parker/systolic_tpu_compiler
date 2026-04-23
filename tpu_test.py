@@ -10,6 +10,7 @@ from ultralytics.utils.nms import non_max_suppression
 # 1. Hardware Architecture Constants & RAM
 # =========================================================================
 MAT_SIZE = 8
+IMG_SIZE = 384
 RAM_A = np.zeros(262144, dtype=object)
 RAM_B = np.zeros(2000000, dtype=object)
 iram = np.zeros(100000, dtype=np.uint32)
@@ -102,13 +103,20 @@ def run_npu_fsm():
         elif op == 0x5: rN = py
         elif op == 0x6: rK = py
         elif op == 0x7: act = py
+        elif op == 0x8: base_c = py
         elif op == 0xB: rqs = fixed28_to_float(py)
         elif op == 0x9: next_stride, next_kernel, next_pad = (py>>8)&0xF, (py>>4)&0xF, py&0xF
+        
+        # LOGIC SYNC: Ignore Tile Halts in software simulator!
+        elif op == 0xE: pass 
+        
+        # LOGIC SYNC: Layer Halts trigger the CPU rewindow
         elif op == 0xF:
             if global_output_stream: 
                 rewindow = True
                 prev_N = rN
             l_idx += 1
+            
         elif op == 0xC:
             if rewindow:
                 side = int(math.sqrt(len(global_output_stream) // math.ceil(prev_N/MAT_SIZE)))
@@ -118,7 +126,6 @@ def run_npu_fsm():
                 if stream_ptr < len(global_input_stream):
                     RAM_A[base_a+i] = global_input_stream[stream_ptr]; stream_ptr += 1
             
-            # FIX: Implement proper bit-unpacking
             A = fetch_A_tile(RAM_A, base_a, rM, rK)
             B = fetch_B_tile(RAM_B, base_b, rK, rN)
             
@@ -135,7 +142,7 @@ def run_npu_fsm():
 def main():
     global global_input_stream, GLOBAL_BIASES, GLOBAL_SCALES
     model = YOLO(r"linear_best.pt")
-    img_rgb = cv2.cvtColor(cv2.resize(cv2.imread("eco_00060.png"), (512, 512)), cv2.COLOR_BGR2RGB)
+    img_rgb = cv2.cvtColor(cv2.resize(cv2.imread("eco_00060.png"), (IMG_SIZE, IMG_SIZE)), cv2.COLOR_BGR2RGB)
     
     with open("instructions.mem") as f: 
         for i, l in enumerate(f): iram[i] = int(l.strip(), 16)
@@ -151,7 +158,7 @@ def main():
         return
 
     # Run Reference
-    gt = model(img_rgb, imgsz=512, conf=0.25, verbose=False)[0]
+    gt = model(img_rgb, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
     for b in gt.boxes:
         x1, y1, x2, y2 = map(int, b.xyxy[0])
         cv2.rectangle(img_rgb, (x1, y1), (x2, y2), (255, 0, 0), 3)
@@ -162,11 +169,12 @@ def main():
     for p in img_q.reshape(-1, 3):
         init_s.append(pack_8bit_to_256bit(np.pad(p, (0, MAT_SIZE-3))))
         
-    global_input_stream = cpu_software_rewindow(init_s, 512, 512, 3)
+    global_input_stream = cpu_software_rewindow(init_s, IMG_SIZE, IMG_SIZE, 3)
     run_npu_fsm()
     
     # Decode Final Tensor
-    grid, out_c = 16, 40
+    grid = IMG_SIZE//32
+    out_c = 40
     data = np.zeros((grid, grid, out_c), dtype=np.float32)
     wpx = math.ceil(out_c/MAT_SIZE)
     for i in range(grid*grid):
@@ -206,8 +214,7 @@ def main():
     with torch.no_grad():
         preds = model.model.model[-1]([hw_t])
         
-    # Restored to 0.25!
-    hwd = non_max_suppression(preds, 0.0005, 0.15)
+    hwd = non_max_suppression(preds, 0.035, 0.10)
     hwd = hwd[0] if len(hwd) > 0 else None
     
     if hwd is not None:

@@ -6,6 +6,7 @@ from ultralytics import YOLO
 import cv2
 
 MAT_SIZE = 8
+IMG_SIZE = 384  # Centralized image size!
 
 def fuse_conv_and_bn(weights, bias, gamma, beta, mean, var, epsilon=1e-5):
     std = np.sqrt(var + epsilon)
@@ -52,7 +53,8 @@ def calibrate_activations(model, img_path):
             hooks.append(mod.register_forward_hook(hook_fn))
             
     img = cv2.imread(img_path)
-    img_rgb = cv2.cvtColor(cv2.resize(img, (512, 512)), cv2.COLOR_BGR2RGB)
+    # Use dynamic IMG_SIZE
+    img_rgb = cv2.cvtColor(cv2.resize(img, (IMG_SIZE, IMG_SIZE)), cv2.COLOR_BGR2RGB)
     t = torch.from_numpy(img_rgb).permute(2,0,1).unsqueeze(0).float() / 255.0
     
     with torch.no_grad():
@@ -68,7 +70,9 @@ def main_compiler(weights_path, cal_img_path):
     
     print("[COMPILER] Generating Instructions & Weight memory...")
     insts, weights, biases = [], [], []
-    curr_res, addr_b, l_idx = (512, 512), 0, 0
+    
+    # Use dynamic IMG_SIZE for initial resolution
+    curr_res, addr_b, l_idx = (IMG_SIZE, IMG_SIZE), 0, 0
     
     for name, mod in model.model.named_modules():
         if "model.14" in name: continue
@@ -91,11 +95,14 @@ def main_compiler(weights_path, cal_img_path):
         h_out, w_out = ((h_in + 2*p - k)//s)+1, ((w_in + 2*p - k)//s)+1
         act = 2 if isinstance(getattr(mod, 'act', None), nn.SiLU) else (1 if isinstance(getattr(mod, 'act', None), nn.ReLU) else 0)
         
+        rN = int8_w.shape[3]
+        rK = int8_w.shape[0] * int8_w.shape[1] * int8_w.shape[2]
+        
         weights.extend(pack_weights_to_hex(int8_w))
+        
         insts.extend([
-            make_opcode('3', MAT_SIZE), 
-            make_opcode('5', int8_w.shape[3]), 
-            make_opcode('6', int8_w.shape[0]*int8_w.shape[1]*int8_w.shape[2]),
+            make_opcode('5', rN), 
+            make_opcode('6', rK),
             make_opcode('2', addr_b), 
             make_opcode('7', act), 
             make_opcode('B', float_to_fixed28(requant)), 
@@ -105,13 +112,24 @@ def main_compiler(weights_path, cal_img_path):
         m_rem, ping = h_out*w_out, True
         while m_rem > 0:
             tile = min(m_rem, 1024)
-            addr = 0 if ping else 16384
-            insts.extend([make_opcode('4', tile), make_opcode('1', addr), make_opcode('8', addr), make_opcode('C', 0)])
+            if tile >= MAT_SIZE:
+                tile = (tile // MAT_SIZE) * MAT_SIZE
+                
+            addr = 0 if ping else 8192 
+            
+            insts.extend([
+                make_opcode('4', tile), 
+                make_opcode('1', addr), 
+                make_opcode('8', addr), 
+                make_opcode('C', 0),
+                make_opcode('E', 0) 
+            ])
             m_rem -= tile
             ping = not ping
         
         addr_b += len(pack_weights_to_hex(int8_w))
-        insts.append(make_opcode('F', 0))
+        
+        insts.append(make_opcode('F', 0)) 
         curr_res, l_idx = (h_out, w_out), l_idx + 1
 
     with open("instructions.mem", "w") as f: f.write("\n".join(insts))
